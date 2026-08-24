@@ -1,0 +1,211 @@
+name: Staging release
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+# Serialize staging builds so an older run cannot overwrite the mutable release
+# after a newer one. Running jobs are never cancelled during asset publication.
+concurrency:
+  group: staging-release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare staging build
+    if: >-
+      github.event.repository.fork == true &&
+      github.repository == 'guitar24t/youtube-audio-caster' &&
+      github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.metadata.outputs.short_sha }}
+      version: ${{ steps.metadata.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: false
+          persist-credentials: false
+
+      - id: metadata
+        name: Choose the staging version
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const sourceVersion = require('./package.json').version;
+          const match = /^(\d+)\.(\d+)\.(\d+)/.exec(sourceVersion);
+          if (!match) throw new Error(`cannot derive a staging version from ${sourceVersion}`);
+          const version = `${match[1]}.${match[2]}.${Number(match[3]) + 1}`
+            + `-staging.${process.env.GITHUB_RUN_NUMBER}`;
+          const shortSha = process.env.GITHUB_SHA.slice(0, 7);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            `short_sha=${shortSha}\nversion=${version}\n`);
+          NODE
+
+      # The permanent marker points at fork main, where this workflow does not
+      # exist. The job only updates that release's assets; GITHUB_TOKEN never
+      # creates a tag/release for a commit that changes workflow files.
+      - name: Verify the staging release marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view staging-latest --repo "$GITHUB_REPOSITORY" >/dev/null
+
+  build:
+    name: ${{ matrix.label }} staging installer
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, label: macOS, script: dist:mac }
+          - { os: windows-latest, label: Windows, script: dist:win }
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: false
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # Change package metadata only in the runner so filenames and About/version
+      # data identify this exact staging build without polluting the branch.
+      - name: Set staging version
+        run: npm version --no-git-tag-version "${{ needs.prepare.outputs.version }}"
+
+      - run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Electron renderer smoke tests
+        run: npm run smoke:electron
+
+      - name: Build unsigned installers
+        run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-${{ matrix.label }}-${{ needs.prepare.outputs.version }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
+  publish:
+    name: Publish staging prerelease
+    needs: [prepare, build]
+    if: >-
+      github.event.repository.fork == true &&
+      github.repository == 'guitar24t/youtube-audio-caster' &&
+      github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: staging-*-${{ needs.prepare.outputs.version }}
+          path: out
+          merge-multiple: true
+
+      - name: Give staging assets stable names
+        shell: bash
+        env:
+          STAGING_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p release
+          for FILE in out/*; do
+            case "$(basename "$FILE")" in
+              *-Windows-Installer.exe) NAME=YouTube.Audio.Caster-Staging-Windows-Installer.exe ;;
+              *-Windows-Portable-NoInstall.exe) NAME=YouTube.Audio.Caster-Staging-Windows-Portable-NoInstall.exe ;;
+              *-macOS-arm64.dmg) NAME=YouTube.Audio.Caster-Staging-macOS-arm64.dmg ;;
+              *-macOS-x64.dmg) NAME=YouTube.Audio.Caster-Staging-macOS-x64.dmg ;;
+              *-arm64-mac.zip) NAME=YouTube.Audio.Caster-Staging-arm64-mac.zip ;;
+              *-mac.zip) NAME=YouTube.Audio.Caster-Staging-x64-mac.zip ;;
+              *) echo "unexpected staging asset: $FILE"; exit 1 ;;
+            esac
+            cp "$FILE" "release/$NAME"
+          done
+          {
+            echo "Version: v$STAGING_VERSION"
+            echo "Commit: $GITHUB_SHA"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > release/STAGING-BUILD.txt
+
+      - name: Build staging release notes
+        shell: bash
+        env:
+          STAGING_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          BASE_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' \
+            --exclude '*-staging.*' "$GITHUB_SHA" 2>/dev/null || true)
+          {
+            echo 'Automated build from the fork staging branch for testing only.'
+            echo
+            echo "- Commit: [$GITHUB_SHA]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)"
+            echo "- Version: \`v$STAGING_VERSION\`"
+            echo "- Workflow: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            if [ -n "$BASE_TAG" ]; then
+              echo
+              echo "### Changes since $BASE_TAG"
+              git log --format='- %s (`%h`)' "$BASE_TAG..$GITHUB_SHA"
+            fi
+            echo
+            echo '### Downloads'
+            echo '- **macOS** — `.dmg` or `.zip` for Apple Silicon and Intel'
+            echo '- **Windows** — installer or portable `.exe`'
+            echo
+            echo 'These builds are unsigned and may trigger operating-system warnings.'
+            echo 'The auto-generated source archives below belong to the permanent release marker; use the commit link above for the source used by these installers.'
+          } > NOTES.md
+
+      # A manual rerun keeps its original SHA. Do not let an old rerun replace
+      # installers that were already published from a newer staging commit.
+      - id: freshness
+        name: Verify this is still the staging head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/staging" --jq .sha)
+          if [ "$HEAD_SHA" = "$GITHUB_SHA" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping stale build $GITHUB_SHA; staging is now $HEAD_SHA"
+          fi
+
+      - name: Update the fork staging prerelease
+        if: steps.freshness.outputs.current == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+          STAGING_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release upload staging-latest release/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit staging-latest --repo "$GITHUB_REPOSITORY" \
+            --title "Staging v$STAGING_VERSION ($SHORT_SHA)" \
+            --notes-file NOTES.md --prerelease
