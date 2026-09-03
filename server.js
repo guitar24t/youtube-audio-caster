@@ -19,6 +19,7 @@ const WD = require('./watchdog.js');
 const VER = require('./version.js');
 const LAUNCH = require('./launch-at-login.js');
 const YT = require('./youtube.js');
+const PAIR = require('./pairing.js');
 const {
   DEFAULT_OPERATION_TIMEOUT_MS,
   createVolumeWriteCoordinator,
@@ -33,6 +34,7 @@ const DATA_DIR = process.env.CASTAUDIO_DATA || __dirname;
 ID.setStorePath(path.join(DATA_DIR, 'sessions.json'));
 PL.init(DATA_DIR);
 SET.init(DATA_DIR);
+PAIR.init(DATA_DIR);
 
 /* Only Electron can register a login item, and this server also runs headless,
    where there is nothing to register one with. main.js injects an agent once
@@ -1075,6 +1077,31 @@ setInterval(() => { if (connected()) syncQueue().catch(() => {}); }, 4000).unref
 /* ---------- api ---------- */
 const app = express();
 app.use(express.json());
+
+/* Everything below this line can start, stop and retarget the speakers, read
+   the playlists and rewrite the settings. On loopback that is the app talking
+   to itself and needs no ceremony. From anywhere else it is a device on the
+   wifi, and it has to prove it was handed the pairing token.
+
+   Registered before the routes rather than sprinkled through them, so a route
+   added later is covered by having been added, not by somebody remembering. */
+const fromLoopback = req => PAIR.isLoopback(req.socket.remoteAddress);
+const suppliedToken = req =>
+  req.get('x-caster-token') || (req.query && req.query.t) || '';
+
+app.use('/api', (req, res, next) => {
+  const loopback = fromLoopback(req);
+  const verdict = PAIR.decide({
+    loopback,
+    networkEnabled: !!SET.load().allow_network_access,
+    /* not evaluated for a loopback caller: there is no token to check and no
+       reason to touch the disk for one */
+    tokenValid: loopback ? true : PAIR.matches(suppliedToken(req)),
+  });
+  if (verdict.allow) return next();
+  res.status(verdict.status).json({ error: verdict.error });
+});
+
 app.use(express.static(path.join(__dirname, 'renderer')));
 
 app.get('/api/devices', async (req, res) => {
@@ -1312,10 +1339,23 @@ app.post('/api/clientlog', (req, res) => {
    to merge a partial response into what it already had - and the login item is
    re-read from the OS on the way out, which is what makes an external change
    show up rather than the value we just wrote. */
-const settingsPayload = () => ({ ...SET.load(), launch_at_login: launchStatus() });
+const settingsPayload = (withToken = false) => ({
+  ...SET.load(),
+  launch_at_login: launchStatus(),
+  network: networkStatus(withToken),
+});
 const SETTABLE = ['launch_at_login', ...SET.BOOLEANS];
 
-app.get('/api/settings', (req, res) => res.json(settingsPayload()));
+app.get('/api/settings', (req, res) => res.json(settingsPayload(fromLoopback(req))));
+
+/* Rotating invalidates every phone that was paired, which is the point: it is
+   the button you press after showing the code to a room. Loopback only - a
+   paired phone must not be able to lock out the others. */
+app.post('/api/pair/rotate', (req, res) => {
+  if (!fromLoopback(req)) return res.status(403).json({ error: 'pair codes are managed from the app window' });
+  PAIR.rotate();
+  res.json(networkStatus(true));
+});
 
 app.post('/api/settings', (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
@@ -1334,7 +1374,16 @@ app.post('/api/settings', (req, res) => {
     }
     const prefs = asked.filter(k => k !== 'launch_at_login');
     if (prefs.length) SET.patch(Object.fromEntries(prefs.map(k => [k, body[k]])));
-    res.json(settingsPayload());
+    /* The reply is accurate before the rebind runs, because networkStatus reads
+       the setting that was just written rather than the socket. */
+    res.json(settingsPayload(fromLoopback(req)));
+    /* And the rebind happens after it, because taking the listener down closes
+       this very connection - answering first is the difference between a
+       settings toggle and a settings toggle that looks like a crash. */
+    if (asked.includes('allow_network_access')) {
+      setImmediate(() => applyNetworkAccess(body.allow_network_access)
+        .catch(e => logErr('network access: ' + e.message)));
+    }
   } catch (e) { logErr(e); res.status(500).json({ error: String(e.message || e) }); }
 });
 
@@ -1531,11 +1580,98 @@ app.get('/api/version', (req, res) => res.json(S.build));
 
 app.get('/api/errors', (req, res) => res.json({ errors: S.errors.slice(-10) }));
 
+/* ---------- who may reach this server ----------
+   Loopback is the default and the safe state. Opening it to the network is a
+   rebind rather than a flag, because a socket bound to 127.0.0.1 cannot be
+   talked into answering the wifi by any amount of middleware - the kernel
+   simply never delivers the packet. The gate above is defence in depth; this
+   is the actual boundary. */
+let httpServer = null;
+let boundPort = null;
+let advert = null;
+
+const lanAddress = () => {
+  for (const iface of Object.values(os.networkInterfaces()).flat()) {
+    if (iface && iface.family === 'IPv4' && !iface.internal) return iface.address;
+  }
+  return null;
+};
+
+function listenOn(host, port) {
+  return new Promise((resolve, reject) => {
+    const srv = app.listen(port, host, () => resolve(srv));
+    srv.on('error', e => reject(new Error(`cannot listen on ${host}:${port} - ${e.message}`)));
+  });
+}
+
+/* Advertised only while network access is on, and withdrawn the moment it is
+   off - an advert for a port that now refuses you is worse than no advert. */
+let advertBonjour = null;
+function advertise(on) {
+  try {
+    /* Destroy the whole instance, not just the service: publish() opens its own
+       mDNS socket, and stopping the service alone would leave one bound per
+       toggle until the app was restarted. */
+    if (advert) { advert.stop(); advert = null; }
+    if (advertBonjour) { advertBonjour.destroy(); advertBonjour = null; }
+    if (!on || !boundPort) return;
+    advertBonjour = new Bonjour();
+    advert = advertBonjour.publish({
+      name: 'YouTube Audio Caster',
+      type: 'youtubeaudiocaster',
+      protocol: 'tcp',
+      port: boundPort,
+    });
+  } catch (e) { logErr('could not advertise on the network: ' + e.message); }
+}
+
+async function applyNetworkAccess(enabled) {
+  const wanted = enabled ? '0.0.0.0' : '127.0.0.1';
+  const current = httpServer && httpServer.address();
+  if (current && current.address === wanted) return networkStatus();
+  if (httpServer) {
+    await new Promise(done => {
+      httpServer.close(done);
+      if (typeof httpServer.closeAllConnections === 'function') httpServer.closeAllConnections();
+    });
+  }
+  httpServer = await listenOn(wanted, boundPort);
+  console.log(`  listening on ${wanted}:${boundPort}`);
+  advertise(enabled);
+  return networkStatus();
+}
+
+/* The token is only ever handed out over loopback - the window on this machine
+   is the only thing entitled to learn it, and it is what shows the code. */
+function networkStatus(includeToken = false) {
+  const enabled = !!SET.load().allow_network_access;
+  const host = lanAddress();
+  const out = {
+    enabled,
+    address: host,
+    port: boundPort,
+    url: enabled && host && boundPort ? `http://${host}:${boundPort}/` : null,
+  };
+  if (includeToken && enabled) {
+    out.token = PAIR.token();
+    out.pair_url = out.url ? `${out.url}?t=${out.token}` : null;
+  }
+  return out;
+}
+
 function start(port = process.env.PORT || 8765, host = process.env.HOST || '127.0.0.1') {
   return new Promise((resolve, reject) => {
     const srv = app.listen(port, host, () => {
+      httpServer = srv;
+      boundPort = (srv.address() || {}).port || port;
       console.log(`\n  YouTube Audio Caster -> http://${host}:${port}\n`);
       resolve(srv);
+      /* A machine that had network access on last time keeps it, but the rebind
+         happens after the promise settles so a failure to take the wider bind
+         can never stop the app from starting on loopback. */
+      if (SET.load().allow_network_access) {
+        applyNetworkAccess(true).catch(e => logErr('network access: ' + e.message));
+      }
       /* Discovery starts AFTER resolve and cannot take the app down with it.
          Binding mDNS on udp/5353 fails on plenty of Windows machines - Apple's
          Bonjour service holds the port, or the firewall blocks it - and this
@@ -1555,5 +1691,5 @@ function shutdown() {
   SONOS.stop();
 }
 
-module.exports = { start, shutdown, setLaunchAgent, app, S };
+module.exports = { start, shutdown, setLaunchAgent, applyNetworkAccess, networkStatus, app, S };
 if (require.main === module) start();

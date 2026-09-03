@@ -16,7 +16,10 @@ const path = require('path');
    asked for it, and an app that opens a window on every boot is not what
    "start at login" means for something that lives in the menu bar. It has no
    effect until the login item exists. */
-const DEFAULTS = { start_quietly: true };
+/* Off until asked for. Turning it on binds the control api to the local
+   network, which is a decision with a blast radius - it must be a thing the
+   owner did on purpose, never a default they inherit. */
+const DEFAULTS = { start_quietly: true, allow_network_access: false };
 const BOOLEANS = Object.keys(DEFAULTS);
 
 let FILE = null;

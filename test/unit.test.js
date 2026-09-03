@@ -11,6 +11,7 @@ const CQ = require('../castqueue.js');
 const ID = require('../identity.js');
 const SO = require('../sonos.js');
 const YT = require('../youtube.js');
+const PAIR = require('../pairing.js');
 const { calculateTrayPopupPosition } = require('../tray-popup-position.js');
 const {
   bindTrayActivation,
@@ -993,36 +994,110 @@ function fakeElectronApp({ isPackaged = true, appPath = 'C:\\src\\app', settings
   };
 }
 
+/* ---------- who may reach the control api ---------- */
+
+test('the app talking to itself needs no token', () => {
+  for (const address of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) {
+    assert.ok(PAIR.isLoopback(address), `${address} is this machine`);
+    assert.deepStrictEqual(
+      PAIR.decide({ loopback: true, networkEnabled: false, tokenValid: false }),
+      { allow: true }, 'loopback must work with the feature off and no token');
+  }
+});
+
+test('an address off the network is never mistaken for this machine', () => {
+  for (const address of ['192.168.1.5', '10.0.0.9', '::ffff:192.168.1.5',
+                         '127.0.0.1.evil.com', '0.0.0.0', '', null, undefined]) {
+    assert.ok(!PAIR.isLoopback(address), `${address} must not pass as loopback`);
+  }
+});
+
+test('REGRESSION: with network access off, the network is told the door is shut', () => {
+  const verdict = PAIR.decide({ loopback: false, networkEnabled: false, tokenValid: true });
+  assert.strictEqual(verdict.allow, false);
+  /* 403 even when the token happens to be right: answering 401 here would tell
+     a scanner that a valid token exists to go looking for. */
+  assert.strictEqual(verdict.status, 403);
+  assert.match(verdict.error, /not accepting connections/);
+});
+
+test('REGRESSION: with network access on, an unpaired device is refused', () => {
+  const verdict = PAIR.decide({ loopback: false, networkEnabled: true, tokenValid: false });
+  assert.strictEqual(verdict.allow, false);
+  assert.strictEqual(verdict.status, 401);
+  assert.deepStrictEqual(
+    PAIR.decide({ loopback: false, networkEnabled: true, tokenValid: true }),
+    { allow: true }, 'a paired device gets in');
+});
+
+test('a pairing token is long, stable, and only equal to itself', () => {
+  const dir = tmp();
+  PAIR.init(dir);
+  const token = PAIR.token();
+  assert.ok(token.length >= 64, 'token is too short to be worth having');
+  assert.strictEqual(PAIR.token(), token, 'the same token comes back');
+  assert.ok(PAIR.matches(token));
+  for (const wrong of ['', null, undefined, 'x', token.slice(0, -1), token + 'a', token.toUpperCase()]) {
+    assert.ok(!PAIR.matches(wrong), `matched something that was not the token: ${wrong}`);
+  }
+});
+
+test('rotating a pairing token locks out everything paired with the old one', () => {
+  const dir = tmp();
+  PAIR.init(dir);
+  const before = PAIR.token();
+  const after = PAIR.rotate();
+  assert.notStrictEqual(after, before);
+  assert.ok(!PAIR.matches(before), 'the old token still worked after a rotate');
+  assert.ok(PAIR.matches(after));
+  assert.ok(!fs.existsSync(PAIR.file() + '.tmp'), 'the temp file is renamed, never left behind');
+});
+
+test('a corrupt or truncated pairing file mints a new token instead of failing open', () => {
+  const dir = tmp();
+  PAIR.init(dir);
+  for (const junk of ['not json{', '{}', '{"token":123}', '{"token":"tooshort"}']) {
+    fs.writeFileSync(path.join(dir, 'pairing.json'), junk);
+    PAIR.init(dir);                       // drop the cache, as a restart would
+    const token = PAIR.token();
+    assert.ok(token.length >= 64, `junk file produced a weak token: ${junk}`);
+    assert.ok(!PAIR.matches('tooshort'), 'the junk value was accepted as a token');
+  }
+});
+
 test('settings fall back to defaults for a missing, corrupt or hand-broken file', () => {
   const dir = tmp();
   SET.init(dir);
-  assert.deepStrictEqual(SET.load(), { start_quietly: true }, 'no file at all');
+  assert.deepStrictEqual(SET.load(), { ...SET.DEFAULTS }, 'no file at all');
 
   fs.writeFileSync(path.join(dir, 'settings.json'), 'not json{');
-  assert.deepStrictEqual(SET.load(), { start_quietly: true }, 'unparseable');
+  assert.deepStrictEqual(SET.load(), { ...SET.DEFAULTS }, 'unparseable');
 
   fs.writeFileSync(path.join(dir, 'settings.json'), '["an array"]');
-  assert.deepStrictEqual(SET.load(), { start_quietly: true }, 'not an object');
+  assert.deepStrictEqual(SET.load(), { ...SET.DEFAULTS }, 'not an object');
 
   /* A string where the UI expects a checkbox must not reach the renderer. */
   fs.writeFileSync(path.join(dir, 'settings.json'), '{"start_quietly":"yes"}');
-  assert.deepStrictEqual(SET.load(), { start_quietly: true }, 'wrong type');
+  assert.deepStrictEqual(SET.load(), { ...SET.DEFAULTS }, 'wrong type');
 });
 
 test('settings persist, merge, and drop keys nobody declared', () => {
   const dir = tmp();
   SET.init(dir);
-  assert.deepStrictEqual(SET.patch({ start_quietly: false }), { start_quietly: false });
-  assert.deepStrictEqual(SET.load(), { start_quietly: false }, 'survives a reload');
+  const off = { ...SET.DEFAULTS, start_quietly: false };
+  assert.deepStrictEqual(SET.patch({ start_quietly: false }), off);
+  assert.deepStrictEqual(SET.load(), off, 'survives a reload');
 
   // an unknown key must not land in the file, and must not disturb what is there
-  assert.deepStrictEqual(SET.patch({ nonsense: true }), { start_quietly: false });
-  assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(SET.file(), 'utf8'))),
-    ['start_quietly']);
+  assert.deepStrictEqual(SET.patch({ nonsense: true }), off);
+  const written = JSON.parse(fs.readFileSync(SET.file(), 'utf8'));
+  assert.deepStrictEqual(Object.keys(written).sort(), [...SET.BOOLEANS].sort(),
+    'the file holds the declared preferences and nothing else');
+  assert.ok(!('nonsense' in written));
 
   // a wrong type is ignored rather than written through
-  assert.deepStrictEqual(SET.patch({ start_quietly: 'no' }), { start_quietly: false });
-  assert.deepStrictEqual(SET.patch({ start_quietly: true }), { start_quietly: true });
+  assert.deepStrictEqual(SET.patch({ start_quietly: 'no' }), off);
+  assert.deepStrictEqual(SET.patch({ start_quietly: true }), { ...SET.DEFAULTS, start_quietly: true });
   assert.ok(!fs.existsSync(SET.file() + '.tmp'), 'the temp file is renamed, never left behind');
 });
 
