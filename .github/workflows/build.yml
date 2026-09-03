@@ -62,8 +62,16 @@ jobs:
   # its own files races two writers against the same release.
   release:
     name: Publish release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build]
+    # always() is what lets an OPTIONAL job be added to `needs` later without its
+    # absence suppressing this one. Anything genuinely required must be named in
+    # the condition, as `build` is here; anything optional is deliberately left
+    # out of it. Without always(), a skipped optional need skips the publish and
+    # takes the perfectly good desktop installers with it.
+    if: >-
+      always()
+      && startsWith(github.ref, 'refs/tags/v')
+      && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +86,8 @@ jobs:
       - name: Collect installers
         run: |
           mkdir -p out
-          find artifacts -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' \) \
+          find artifacts -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' \
+                                  -o -name '*.apk' -o -name '*.aab' -o -name '*.ipa' \) \
             -exec cp {} out/ \;
           ls -lh out
 
