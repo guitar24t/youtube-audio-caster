@@ -1,6 +1,6 @@
 {
   "name": "youtube-audio-caster-mobile",
-  "version": "1.5.1-a",
+  "version": "1.6.0-a",
   "private": true,
   "description": "Phone control surface for YouTube Audio Caster. Talks to the desktop app over the local network; it is not a second copy of it.",
   "scripts": {

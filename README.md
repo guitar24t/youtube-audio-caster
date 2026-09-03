@@ -101,6 +101,25 @@ extraction has to happen behind the same router as the speaker. And the computer
 has to be awake, because it is still the thing doing the work; the phone is a
 control surface, not a second copy of the app.
 
+### The phone app
+
+There is an Android app, and an iPhone one for anyone you add to TestFlight. It
+is a control surface, not a second copy: your computer still does the finding,
+the extracting and the casting, so it has to be awake and on the same network.
+That is not a limitation that can be engineered away — the stream URLs YouTube
+signs are tied to the address that asked for them, so extraction has to happen
+behind the same router as the speaker.
+
+Install the `.apk` from the releases page (Android will ask you to allow
+installing from your browser), open it, and either paste the pairing link or
+enter the eight-character code from **Settings → Show a pairing code**. After
+that it is the same window you get on the computer.
+
+Neither store carries it, and neither will: Apple's guideline 5.2.3 names
+YouTube explicitly, and Google — who own YouTube — enforce the same thing
+through Play's Device and Network Abuse policy. Sideloading the Android build is
+the supported route, and iPhone means TestFlight.
+
 ### Starting it automatically
 
 **Settings** (top right of the window) has **Start at login**: the app opens by
