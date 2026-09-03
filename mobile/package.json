@@ -5,10 +5,11 @@
   "description": "Phone control surface for YouTube Audio Caster. Talks to the desktop app over the local network; it is not a second copy of it.",
   "scripts": {
     "sync:www": "node scripts/sync-www.js",
-    "sync": "npm run sync:www && cap sync",
-    "build:android": "npm run sync:www && cap sync android && cd android && ./gradlew assembleDebug",
-    "build:ios": "npm run sync:www && cap sync ios",
-    "check": "node scripts/check-www.js"
+    "icons": "node scripts/make-icons.js",
+    "prepare:android": "npm run sync:www && npm run icons && cap sync android",
+    "prepare:ios": "npm run sync:www && npm run icons && cap sync ios",
+    "build:android": "npm run prepare:android && cd android && ./gradlew assembleDebug",
+    "build:ios": "npm run prepare:ios"
   },
   "dependencies": {
     "@capacitor/android": "8.5.1",

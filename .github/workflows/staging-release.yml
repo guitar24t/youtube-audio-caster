@@ -136,9 +136,12 @@ jobs:
         working-directory: mobile
         run: npm ci
 
-      - name: Bundle the desktop page into the app
+      # Copies the desktop page in, draws the icons, and runs cap sync -
+      # which regenerates capacitor-cordova-android-plugins, gitignored by
+      # Capacitor's template and required by gradle at configure time.
+      - name: Prepare
         working-directory: mobile
-        run: npm run sync:www
+        run: npm run prepare:android
 
       - name: Build the apk
         working-directory: mobile/android

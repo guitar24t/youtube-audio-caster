@@ -84,11 +84,15 @@ jobs:
         working-directory: mobile
         run: npm ci
 
-      # The desktop page is copied in here rather than committed, so this step
-      # is what makes the app contain a UI at all.
-      - name: Bundle the desktop page into the app
+      # One script, used here and by hand, so CI and a laptop cannot drift.
+      # It copies the desktop page in (not committed - renderer/ is the source),
+      # draws the icons, and runs cap sync, which regenerates
+      # capacitor-cordova-android-plugins. That directory is gitignored by
+      # Capacitor's own template, and gradle fails at CONFIGURE time without it,
+      # pointing at a file rather than saying a sync is missing.
+      - name: Prepare
         working-directory: mobile
-        run: npm run sync:www
+        run: npm run prepare:android
 
       - name: Build the apk
         working-directory: mobile/android
@@ -132,9 +136,12 @@ jobs:
         working-directory: mobile
         run: npm ci
 
-      - name: Bundle the desktop page into the app
+      # Also draws AppIcon at 1024. Xcode refuses to build against an empty
+      # icon set, and the error it gives - "did not have any applicable
+      # content" - does not mention icons being absent.
+      - name: Prepare
         working-directory: mobile
-        run: npm run sync:www && npx cap sync ios
+        run: npm run prepare:ios
 
       - name: It still compiles
         working-directory: mobile/ios/App

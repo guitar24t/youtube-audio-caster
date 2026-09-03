@@ -74,38 +74,48 @@ function png(c) {
     chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-const OUT = path.join(__dirname, '..', 'assets');
-fs.mkdirSync(OUT, { recursive: true });
-const write = (name, c) => { fs.writeFileSync(path.join(OUT, name), png(c)); console.log('  ' + name); };
+/* The glyph and the PNG encoder are useful to anything that needs this app's
+   icon at a size nobody thought of yet - the phone app needs 1024, which is not
+   a size the desktop ever asks for. Exported rather than copied, so there is one
+   drawing of the speaker in this repository and not two that drift. */
+module.exports = { canvas, glyph, roundedRect, png };
 
-// macOS template: supplied black + alpha artwork, automatically recolored by macOS.
-// Keeping it out of the generator prevents npm install from replacing the source
-// design with the older hand-drawn glyph.
-for (const name of ['trayTemplate.png', 'trayTemplate@2x.png']) {
-  const file = path.join(OUT, name);
-  if (!fs.existsSync(file))
-    throw new Error(`missing supplied macOS menu-bar icon: assets/${name}`);
-  /* Existing is not enough: a checkout without git-lfs leaves a text pointer
-     here, which packages happily and shows up as a blank menu bar icon in the
-     built app. Check the magic bytes so that fails at install instead. */
-  const head = fs.readFileSync(file).subarray(0, 8);
-  if (!head.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
-    throw new Error(`assets/${name} is not a PNG - if it starts with `
-      + `"version https://git-lfs..." this checkout needs: git lfs pull`);
-  console.log('  ' + name + ' (supplied)');
+/* Writing the desktop's icons is what happens when this is RUN. Requiring it
+   draws nothing. */
+if (require.main === module) {
+  const OUT = path.join(__dirname, '..', 'assets');
+  fs.mkdirSync(OUT, { recursive: true });
+  const write = (name, c) => { fs.writeFileSync(path.join(OUT, name), png(c)); console.log('  ' + name); };
+
+  // macOS template: supplied black + alpha artwork, automatically recolored by macOS.
+  // Keeping it out of the generator prevents npm install from replacing the source
+  // design with the older hand-drawn glyph.
+  for (const name of ['trayTemplate.png', 'trayTemplate@2x.png']) {
+    const file = path.join(OUT, name);
+    if (!fs.existsSync(file))
+      throw new Error(`missing supplied macOS menu-bar icon: assets/${name}`);
+    /* Existing is not enough: a checkout without git-lfs leaves a text pointer
+       here, which packages happily and shows up as a blank menu bar icon in the
+       built app. Check the magic bytes so that fails at install instead. */
+    const head = fs.readFileSync(file).subarray(0, 8);
+    if (!head.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+      throw new Error(`assets/${name} is not a PNG - if it starts with `
+        + `"version https://git-lfs..." this checkout needs: git lfs pull`);
+    console.log('  ' + name + ' (supplied)');
+  }
+  // Windows: white glyph over a soft dark halo so it reads on light AND dark taskbars
+  {
+    const s = 32, c = canvas(s, s);
+    glyph(c, s, [0, 0, 0, 120], 1.1);          // halo first
+    glyph(c, s, [255, 255, 255, 255], 0);      // glyph on top
+    write('tray-win.png', c);
+  }
+  // app icon for the taskbar / window / installer
+  {
+    const s = 512, c = canvas(s, s);
+    roundedRect(c, s, Math.round(s * 0.22), [47, 109, 246, 255]);
+    glyph(c, s, [255, 255, 255, 255], 0.3);
+    write('icon.png', c);
+  }
+  console.log('icons written');
 }
-// Windows: white glyph over a soft dark halo so it reads on light AND dark taskbars
-{
-  const s = 32, c = canvas(s, s);
-  glyph(c, s, [0, 0, 0, 120], 1.1);          // halo first
-  glyph(c, s, [255, 255, 255, 255], 0);      // glyph on top
-  write('tray-win.png', c);
-}
-// app icon for the taskbar / window / installer
-{
-  const s = 512, c = canvas(s, s);
-  roundedRect(c, s, Math.round(s * 0.22), [47, 109, 246, 255]);
-  glyph(c, s, [255, 255, 255, 255], 0.3);
-  write('icon.png', c);
-}
-console.log('icons written');

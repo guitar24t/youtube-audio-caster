@@ -10,3 +10,7 @@ android/local.properties
 ios/App/build/
 ios/App/Pods/
 ios/App/App/public/
+
+# Drawn at build time by scripts/make-icons.js from the same glyph the desktop
+# uses. Committing it would be a second copy of the artwork to keep in step.
+ios/App/App/Assets.xcassets/AppIcon.appiconset/
