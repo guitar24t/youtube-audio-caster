@@ -98,6 +98,9 @@ button:disabled{opacity:.45;cursor:default}
 label.sm{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
 /* fixed width so the row does not shuffle as the number changes while dragging */
 .volval{font-variant-numeric:tabular-nums;min-width:3.2em;text-align:right}
+.pairurl{display:block;margin-top:6px;padding:6px 8px;background:var(--chip);border-radius:6px;
+  font-size:11.5px;word-break:break-all;user-select:all}
+.pairbtns{display:flex;gap:6px;margin-top:6px}
 .aud{font-size:11px;background:var(--chip);border-radius:5px;padding:1px 6px;color:var(--muted)}
 #plitems{margin-top:12px;max-height:340px;overflow-y:auto;border-radius:9px}
 #plitems:empty{display:none}
@@ -220,6 +223,26 @@ button.mini.done{background:var(--ok)}
           still shows the window.</span>
       </span>
     </label>
+    <label class="set" for="setnet">
+      <input type="checkbox" id="setnet">
+      <span>
+        <b>Let phones on this network control it</b>
+        <span class="meta">Off, the app only answers this computer. On, anything on your wifi
+          that has been given the pairing link below can drive the speakers.</span>
+      </span>
+    </label>
+    <div class="set dependent" id="setpairrow">
+      <span>
+        <b>Pairing link</b>
+        <span class="meta">Open this on the phone once. It is a password - anyone who has it
+          can control your speakers while this computer is awake.</span>
+        <code class="pairurl" id="setpairurl">—</code>
+        <span class="pairbtns">
+          <button class="ghost mini" id="setpaircopy">Copy link</button>
+          <button class="ghost mini" id="setpairnew" title="Invalidate the old link">New link</button>
+        </span>
+      </span>
+    </div>
     <div id="setmsg"></div>
   </div>
 
@@ -418,7 +441,27 @@ function mountVideo(vid){
   }catch(e){ clog('mount threw: '+e.message); CUR_VID=null; }
 }
 
-async function api(p,o){const r=await fetch(p,o);let j={};try{j=await r.json()}catch(e){}
+/* On this computer there is no token and none is needed - the server knows the
+   difference between itself and the wifi. A phone gets one from the pairing
+   link, keeps it, and strips it out of the address bar so it is not sitting in
+   history or in a screenshot of the url. */
+let PAIR_TOKEN=null;
+try{ PAIR_TOKEN=localStorage.getItem('casterToken')||null; }catch(e){}
+(function(){
+  try{
+    const u=new URL(location.href), t=u.searchParams.get('t');
+    if(!t) return;
+    PAIR_TOKEN=t;
+    try{ localStorage.setItem('casterToken',t); }catch(e){}
+    u.searchParams.delete('t');
+    history.replaceState(null,'',u.pathname+(u.search||'')+(u.hash||''));
+  }catch(e){}
+})();
+
+async function api(p,o){
+  const opts={...(o||{})};
+  if(PAIR_TOKEN) opts.headers={...(opts.headers||{}),'X-Caster-Token':PAIR_TOKEN};
+  const r=await fetch(p,opts);let j={};try{j=await r.json()}catch(e){}
   if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j;}
 
 /* Remembered so the note under the picker can be redrawn on selection without
@@ -792,7 +835,22 @@ function renderSettings(s){
      it is disabled rather than left looking as though it takes effect. */
   $('setquiet').checked=!!s.start_quietly;
   $('setquiet').disabled=!(login.supported&&login.enabled);
+
+  const net=s.network||{enabled:false};
+  $('setnet').checked=!!net.enabled;
+  /* The row is only useful once the feature is on AND the token is in the
+     reply, which happens only for the window on this machine. A phone looking
+     at its own settings pane sees the toggle, not the password. */
+  const link=net.pair_url||null;
+  $('setpairrow').classList.toggle('hide', !net.enabled);
+  $('setpairurl').textContent = link || (net.enabled
+    ? 'No network address - this computer is not on a wifi or wired network.'
+    : '—');
+  $('setpaircopy').disabled=!link;
+  $('setpairnew').disabled=!link;
+  PAIR_LINK=link;
 }
+let PAIR_LINK=null;
 
 async function loadSettings(){
   try{
@@ -814,6 +872,21 @@ async function saveSetting(key,value){
 }
 $('setlogin').onchange=e=>saveSetting('launch_at_login',e.target.checked);
 $('setquiet').onchange=e=>saveSetting('start_quietly',e.target.checked);
+$('setnet').onchange=e=>saveSetting('allow_network_access',e.target.checked);
+$('setpaircopy').onclick=async()=>{
+  if(!PAIR_LINK) return;
+  try{ await navigator.clipboard.writeText(PAIR_LINK); setmsg('pairing link copied','ok');
+    setTimeout(()=>setmsg(''),2000); }
+  catch(e){ setmsg('could not copy: '+e.message,'err'); }
+};
+$('setpairnew').onclick=async()=>{
+  setmsg('');
+  try{ renderSettings(await api('/api/settings'));    // repaint from the server first
+    await api('/api/pair/rotate',{method:'POST'});
+    renderSettings(await api('/api/settings'));
+    setmsg('new link made - phones paired with the old one will need it again','ok');
+  }catch(e){ setmsg(e.message,'err'); }
+};
 
 $('setbtn').onclick=()=>{
   const open=$('setcard').classList.toggle('hide')===false;

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const SET = require('../settings.js');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yac-server-routes-'));
 process.env.CASTAUDIO_DATA = dataDir;
 
@@ -90,6 +91,73 @@ test('REGRESSION: routes refuse a url yt-dlp would read as an option', async t =
   const scheme = await postTo(baseUrl, '/api/cast', { url: 'file:///etc/passwd', device: 'anything' });
   assert.equal(scheme.status, 400);
   assert.match((await scheme.json()).error, /only http and https/);
+});
+
+/* The unit tests pin the access RULE; this pins the wiring, by making a request
+   that genuinely arrives off the network rather than one that only claims to.
+   Bound to 0.0.0.0 and dialled at this machine's own LAN address, so
+   req.socket.remoteAddress is the NIC address and the loopback branch is not
+   taken. Skipped on a host with no network, which is the only honest thing to
+   do - there is no way to fake a non-loopback peer without one. */
+test('a device on the network needs the pairing token, and is told nothing before that', async t => {
+  const PAIR = require('../pairing.js');
+  const os = require('node:os');
+  const lan = Object.values(os.networkInterfaces()).flat()
+    .find(i => i && i.family === 'IPv4' && !i.internal);
+  if (!lan) return t.skip('no non-loopback interface on this host');
+
+  const server = await new Promise((resolve, reject) => {
+    const srv = app.listen(0, '0.0.0.0', () => resolve(srv));
+    srv.once('error', reject);
+  });
+  t.after(() => close(server));
+  const port = server.address().port;
+  const viaLan = path => `http://${lan.address}:${port}${path}`;
+  const loopback = path => `http://127.0.0.1:${port}${path}`;
+
+  PAIR.init(dataDir);
+  const token = PAIR.token();
+
+  // off: the network is told the door is shut, and not that a token exists
+  SET.patch({ allow_network_access: false });
+  const shut = await fetch(viaLan('/api/status'));
+  assert.equal(shut.status, 403);
+  assert.match((await shut.json()).error, /not accepting connections/);
+  // ...while this machine is unaffected by the setting entirely
+  assert.equal((await fetch(loopback('/api/status'))).status, 200);
+
+  // on, but unpaired
+  SET.patch({ allow_network_access: true });
+  try {
+    for (const bad of ['', 'wrong', token.slice(0, -1), token + 'x']) {
+      const res = await fetch(viaLan('/api/status'), { headers: { 'X-Caster-Token': bad } });
+      assert.equal(res.status, 401, `a bad token got in: ${JSON.stringify(bad)}`);
+    }
+    assert.equal((await fetch(viaLan('/api/status'))).status, 401, 'no token at all got in');
+
+    // paired, by header and by the query the pairing link uses
+    assert.equal((await fetch(viaLan('/api/status'),
+      { headers: { 'X-Caster-Token': token } })).status, 200);
+    assert.equal((await fetch(viaLan(`/api/status?t=${token}`))).status, 200);
+
+    // the token is never handed to the network, only to this machine
+    const remote = await (await fetch(viaLan('/api/settings'),
+      { headers: { 'X-Caster-Token': token } })).json();
+    assert.ok(!('token' in remote.network), 'a paired phone was told the token');
+    assert.ok(!remote.network.pair_url, 'a paired phone was given the pairing link');
+    const here = await (await fetch(loopback('/api/settings'))).json();
+    assert.equal(here.network.token, token, 'this machine could not read its own token');
+
+    // rotating is not something a paired phone may do
+    assert.equal((await fetch(viaLan('/api/pair/rotate'),
+      { method: 'POST', headers: { 'X-Caster-Token': token } })).status, 403);
+  } finally {
+    SET.patch({ allow_network_access: false });
+  }
+
+  // and turning it back off shuts the door again on an already-paired device
+  const closedAgain = await fetch(viaLan('/api/status'), { headers: { 'X-Caster-Token': token } });
+  assert.equal(closedAgain.status, 403);
 });
 
 test('idle selected Cast target exposes and accepts volume without playback controls', async t => {
@@ -217,10 +285,16 @@ test('settings round trip through the OS for launch, and through disk for the re
   const baseUrl = await settingsServer(t, agent);
 
   const initial = await (await fetch(`${baseUrl}/api/settings`)).json();
-  assert.deepStrictEqual(initial, {
-    start_quietly: true,
+  /* network.address is whatever NIC this machine happens to have, so it is
+     checked for shape rather than value; everything else is exact. */
+  const { network, ...initialRest } = initial;
+  assert.deepStrictEqual(initialRest, {
+    ...SET.DEFAULTS,
     launch_at_login: { supported: true, enabled: false, reason: null },
   });
+  assert.strictEqual(network.enabled, false);
+  assert.strictEqual(network.url, null, 'no address is published while it is off');
+  assert.ok(!('token' in network), 'the pairing token is not handed out while it is off');
 
   const turnedOn = await putSettings(baseUrl, { launch_at_login: true });
   assert.strictEqual(turnedOn.status, 200);
@@ -230,15 +304,18 @@ test('settings round trip through the OS for launch, and through disk for the re
 
   const quiet = await putSettings(baseUrl, { start_quietly: false });
   assert.strictEqual(quiet.status, 200);
-  assert.deepStrictEqual(await quiet.json(), {
+  const { network: quietNetwork, ...quietRest } = await quiet.json();
+  assert.deepStrictEqual(quietRest, {
+    ...SET.DEFAULTS,
     start_quietly: false,
     launch_at_login: { supported: true, enabled: true, reason: null },
   }, 'the whole pane comes back, so a client never has to merge a partial reply');
+  assert.strictEqual(quietNetwork.enabled, false);
 
   // written through to disk, not just held in memory
   assert.deepStrictEqual(
     JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8')),
-    { start_quietly: false });
+    { ...SET.DEFAULTS, start_quietly: false });
 
   /* Changed outside the app: the next read reports the machine, not the last
      thing this process wrote. */

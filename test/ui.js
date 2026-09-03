@@ -209,6 +209,31 @@ app.whenReady().then(async () => {
         ? true : 'a stale click survived a re-render';
     });
 
+    check('the pairing link is shown here and never on the phone', () => {
+      const OFF_NET = { ...SUPPORTED, network: { enabled: false, url: null } };
+      renderSettings(OFF_NET);
+      if (!document.getElementById('setpairrow').classList.contains('hide'))
+        return 'the pairing link was on show with network access off';
+      if (document.getElementById('setnet').checked) return 'the toggle claimed it was on';
+
+      // this machine: the reply carries the token, so the link can be shown
+      renderSettings({ ...SUPPORTED, network: { enabled: true, url: 'http://192.168.1.5:8765/',
+        token: 'abc', pair_url: 'http://192.168.1.5:8765/?t=abc' } });
+      if (document.getElementById('setpairrow').classList.contains('hide'))
+        return 'the pairing link stayed hidden with network access on';
+      if (!document.getElementById('setpairurl').textContent.includes('t=abc'))
+        return 'the link does not carry the token: ' + document.getElementById('setpairurl').textContent;
+      if (!document.getElementById('setnet').checked) return 'the toggle did not paint as on';
+
+      /* a paired phone asking for its own settings gets network.enabled but no
+         token, and must not be offered a link it cannot have */
+      renderSettings({ ...SUPPORTED, network: { enabled: true, url: 'http://192.168.1.5:8765/' } });
+      const shown = document.getElementById('setpairurl').textContent;
+      if (shown.includes('t=')) return 'a token leaked into the phone pane: ' + shown;
+      if (!document.getElementById('setpaircopy').disabled) return 'copy was offered with no link';
+      return true;
+    });
+
     check('casting with no speaker chosen is refused in the page', () => {
       render();
       document.getElementById('url').value = 'https://www.youtube.com/watch?v=I5noeDaJaFQ';

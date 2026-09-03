@@ -77,6 +77,30 @@ quitting, so the app keeps running — it tells you the first time. Left- or
 right-click the icon to open the same menu, change the selected speaker or group's
 volume, or choose **Open Window**. To exit, choose **Quit (stops auto-refresh)**.
 
+### Using it from a phone
+
+**Settings → Let phones on this network control it** is off until you turn it
+on. While it is off the app answers only this computer: the listening socket is
+bound to `127.0.0.1`, so a request from the network is refused by the operating
+system before any of this app's code runs.
+
+Turning it on rebinds to the local network and shows a **pairing link**. Open
+that link once on the phone — it is the whole address plus a token — and the
+browser remembers the token and drops it out of the address bar. Everything the
+window does, the phone can now do.
+
+The link is a password. Anyone who has it can drive your speakers for as long as
+this computer is awake and on the same network. **New link** invalidates the old
+one, which is what to press if it has been on a screen in front of people. The
+token is only ever shown to the window on this computer; a paired phone looking
+at its own settings sees the switch but never the link.
+
+Two things it deliberately cannot do. The phone has to be on the same network —
+the stream URLs YouTube signs are tied to the address that asked for them, so
+extraction has to happen behind the same router as the speaker. And the computer
+has to be awake, because it is still the thing doing the work; the phone is a
+control surface, not a second copy of the app.
+
 ### Starting it automatically
 
 **Settings** (top right of the window) has **Start at login**: the app opens by
