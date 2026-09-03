@@ -145,7 +145,11 @@ jobs:
               *-macOS-x64.dmg) NAME=YouTube.Audio.Caster-Staging-macOS-x64.dmg ;;
               *-arm64-mac.zip) NAME=YouTube.Audio.Caster-Staging-arm64-mac.zip ;;
               *-mac.zip) NAME=YouTube.Audio.Caster-Staging-x64-mac.zip ;;
-              *) echo "unexpected staging asset: $FILE"; exit 1 ;;
+              # Anything not named here is skipped rather than fatal. This ran
+              # AFTER both builds succeeded, so exiting threw away good
+              # installers over a file the renamer had simply never been taught
+              # about - the first new platform artifact would have done it.
+              *) echo "skipping unrecognised staging asset: $FILE"; continue ;;
             esac
             cp "$FILE" "release/$NAME"
           done
