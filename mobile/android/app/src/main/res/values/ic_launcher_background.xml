@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- The adaptive foreground is a WHITE speaker on transparency, so this is
+         the colour it sits on. Capacitor's default is #FFFFFF, which made the
+         icon a blank white square on any launcher that uses adaptive icons -
+         the legacy ic_launcher.png looked fine, so it would only have shown up
+         on a real phone. -->
+    <color name="ic_launcher_background">#2F6DF6</color>
 </resources>
