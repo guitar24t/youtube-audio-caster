@@ -192,3 +192,4 @@ jobs:
           [ "$RUNNER_OS" = "macOS" ] && F="$HOME/Library/Application Support/YouTube Audio Caster/startup-error.log"
           if [ -f "$F" ]; then echo "STARTUP ERROR RECORDED:"; cat "$F"; exit 1; fi
           echo "no startup-error.log - clean start"
+# (temporary line to verify pull_request checks fire; this branch is throwaway)
