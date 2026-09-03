@@ -298,6 +298,80 @@ app.whenReady().then(async () => {
       return held.length === 0 ? true : held.length + ' writes went out with nothing attached';
     });
 
+    /* ---- touch reachability -----------------------------------------------
+       Reordering was HTML5 drag-and-drop only, which fires nothing from a
+       finger, and the row controls were revealed by :hover, which a touch
+       screen does not have. */
+    await acheck('a playlist can be reordered without dragging', async () => {
+      CURPL = { id: 'pl-touch', name: 'Touch', items: [
+        { video_id: 'a', title: 'First',  url: 'https://youtu.be/a', duration: 10 },
+        { video_id: 'b', title: 'Second', url: 'https://youtu.be/b', duration: 20 },
+        { video_id: 'c', title: 'Third',  url: 'https://youtu.be/c', duration: 30 },
+      ] };
+      renderItems();
+      const rows = [...document.querySelectorAll('#plitems .pli')];
+      if (rows.length !== 3) return 'expected 3 rows, got ' + rows.length;
+      for (const row of rows) {
+        if (!row.querySelector('[data-a="up"]')) return 'a row has no move-up control';
+        if (!row.querySelector('[data-a="down"]')) return 'a row has no move-down control';
+      }
+
+      // clicking one must reorder through the same endpoint dragging uses
+      const calls = [];
+      const realFetch = window.fetch;
+      window.fetch = (url, opts) => {
+        calls.push({ url: String(url), body: JSON.parse(opts.body) });
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, playlist: CURPL }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      };
+      try {
+        rows[0].querySelector('[data-a="down"]').click();
+        await sleep(120);
+      } finally { window.fetch = realFetch; }
+
+      if (calls.length !== 1) return 'expected one move request, got ' + calls.length;
+      if (!calls[0].url.endsWith('/api/playlists/pl-touch/move')) return 'wrong endpoint: ' + calls[0].url;
+      if (calls[0].body.from !== 0 || calls[0].body.to !== 1)
+        return 'wrong move: ' + JSON.stringify(calls[0].body);
+      return true;
+    });
+
+    await acheck('moving past either end of the playlist does nothing', async () => {
+      renderItems();
+      const rows = [...document.querySelectorAll('#plitems .pli')];
+      const calls = [];
+      const realFetch = window.fetch;
+      window.fetch = (url, opts) => { calls.push(String(url)); return realFetch(url, opts); };
+      try {
+        rows[0].querySelector('[data-a="up"]').click();                 // already first
+        rows[rows.length - 1].querySelector('[data-a="down"]').click(); // already last
+        await sleep(120);
+      } finally { window.fetch = realFetch; }
+      return calls.length === 0 ? true : calls.length + ' requests went out at the ends';
+    });
+
+    check('nothing a phone needs is hidden behind hover alone', () => {
+      const css = [...document.styleSheets]
+        .flatMap(sheet => { try { return [...sheet.cssRules]; } catch (e) { return []; } })
+        .map(rule => rule.cssText).join(' ');
+      // the media query that un-hides the hover-gated affordances must exist
+      if (!css.includes('hover') || !css.includes('coarse')) return 'no coarse-pointer rules at all';
+      for (const needed of ['.pli-b', '.thumb', '.pli-move']) {
+        if (!css.includes(needed)) return 'no rule mentions ' + needed;
+      }
+      return true;
+    });
+
+    check('the icon-only transport buttons have names, not just tooltips', () => {
+      for (const id of ['prev', 'next', 'shuffle', 'repeat']) {
+        const el = document.getElementById(id);
+        if (!el) return 'no button ' + id;
+        // title= never appears on touch and is not an accessible name
+        if (!el.getAttribute('aria-label')) return id + ' has no aria-label';
+      }
+      return true;
+    });
+
     check('the volume readout says what the volume actually is', () => {
       const v = document.getElementById('vol');
       v.value = '37';

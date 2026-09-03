@@ -115,6 +115,21 @@ label.sm{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6
   cursor:pointer;border-radius:5px;flex:none;opacity:0}
 .pli:hover .pli-b{opacity:1}
 .pli-b:hover{background:var(--bg);color:var(--ink)}
+/* Reordering is HTML5 drag-and-drop, which fires no events at all from touch,
+   so these are how a phone reorders a playlist. Hidden where dragging works, so
+   the desktop row keeps its shape. */
+.pli-move{display:none}
+/* A touch screen has no hover. Everything revealed by :hover above was not just
+   invisible here but invisible AND still tappable, which is worse than absent.
+   The scrub bubble stays hover/scrub-only on purpose: with no pointer to follow
+   there is no position for it to report until a drag is actually under way. */
+@media (hover: none), (pointer: coarse){
+  .pli-b{opacity:1}
+  .bar .thumb{opacity:1}
+  .pli-move{display:inline-block}
+  /* a finger is not a mouse pointer: give the row controls a real target */
+  .pli-b{padding:6px 9px}
+}
 .pgrid{display:grid;grid-template-columns:1fr;gap:16px}
 @media(min-width:860px){.pgrid{grid-template-columns:minmax(0,1fr) 280px}}
 body.noqueue .pside{display:none}
@@ -236,13 +251,13 @@ button.mini.done{background:var(--ok)}
         <div class="time"><span id="tcur">0:00</span><span id="tdur">0:00</span></div>
 
         <div class="row" style="margin-top:12px">
-          <button class="ghost ic" id="prev" title="Previous track"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4"/><line x1="5" y1="19" x2="5" y2="5"/></svg></button>
+          <button class="ghost ic" id="prev" aria-label="Previous track" title="Previous track"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4"/><line x1="5" y1="19" x2="5" y2="5"/></svg></button>
           <button class="ghost" id="play">▶︎ Play</button>
           <button class="ghost" id="pause">❚❚ Pause</button>
-          <button class="ghost ic" id="next" title="Next track"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20"/><line x1="19" y1="5" x2="19" y2="19"/></svg></button>
+          <button class="ghost ic" id="next" aria-label="Next track" title="Next track"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20"/><line x1="19" y1="5" x2="19" y2="19"/></svg></button>
           <button class="ghost" id="stop" title="Stop playing and release the speaker">■ Stop</button>
-          <button class="ghost ic tog" id="shuffle" title="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>
-          <button class="ghost ic tog" id="repeat" title="Repeat: off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg><b id="repone">1</b></button>
+          <button class="ghost ic tog" id="shuffle" aria-label="Shuffle" title="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>
+          <button class="ghost ic tog" id="repeat" aria-label="Repeat" title="Repeat: off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg><b id="repone">1</b></button>
           <button class="ghost" id="refresh" title="Re-issue an expired CDN url and resume">↻ Refresh stream</button>
           <label class="sm" style="margin-left:auto">vol
             <input type="range" id="vol" min="0" max="100" value="80" style="width:110px"
@@ -837,9 +852,11 @@ function renderItems(){
       <img class="pli-thumb" src="${esc(it.thumb||'')}" alt="" onerror="this.style.visibility='hidden'">
       <span class="pli-t" title="${esc(it.title)}">${esc(it.title)}</span>
       <span class="pli-d">${it.duration?fmt(it.duration):'·'}</span>
-      <button class="pli-b" data-a="queue" title="Add to queue">＋</button>
-      <button class="pli-b play" data-a="play" title="Play from here">▶</button>
-      <button class="pli-b del" data-a="del" title="Remove">✕</button>
+      <button class="pli-b pli-move" data-a="up" title="Move up" aria-label="Move up">▲</button>
+      <button class="pli-b pli-move" data-a="down" title="Move down" aria-label="Move down">▼</button>
+      <button class="pli-b" data-a="queue" title="Add to queue" aria-label="Add to queue">＋</button>
+      <button class="pli-b play" data-a="play" title="Play from here" aria-label="Play from here">▶</button>
+      <button class="pli-b del" data-a="del" title="Remove" aria-label="Remove">✕</button>
     </div>`).join('');
   box.scrollTop=keepScroll;
 }
@@ -849,6 +866,14 @@ $('plitems').addEventListener('click', async e=>{
   const idx=+row.dataset.idx, act=e.target.dataset.a;
   if(act==='del'){
     try{ const j=await api(`/api/playlists/${CURPL.id}/item/${idx}`,{method:'DELETE'});
+      CURPL=j.playlist; renderItems(); }catch(err){ plmsg(err.message,'err'); }
+  } else if(act==='up'||act==='down'){
+    /* the same endpoint drag-and-drop uses - this is a second way in, not a
+       second implementation */
+    const to = act==='up' ? idx-1 : idx+1;
+    if(to<0 || to>=CURPL.items.length) return;
+    try{ const j=await api(`/api/playlists/${CURPL.id}/move`,{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({from:idx,to})});
       CURPL=j.playlist; renderItems(); }catch(err){ plmsg(err.message,'err'); }
   } else if(act==='queue'){
     const it=CURPL.items[idx]; if(!it) return;
