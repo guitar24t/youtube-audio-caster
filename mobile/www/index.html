@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Audio Caster</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --ink:#14161a; --muted:#5f6672; --line:#e3e6ea;
+  --accent:#3b6ef5; --err:#c0392b; --ok:#0f9d58; --chip:#eef1f5;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#14161a; --panel:#1c1f25; --ink:#eceef2; --muted:#9aa3b0; --line:#2b3038;
+  --chip:#252a32;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);}
+.wrap{max-width:520px;margin:0 auto;padding:28px 20px 40px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13.5px;margin:0 0 22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:6px}
+input{width:100%;padding:12px;font-size:16px;border:1px solid var(--line);border-radius:9px;
+  background:var(--bg);color:var(--ink);-webkit-appearance:none}
+input#code{font-size:22px;letter-spacing:4px;text-align:center;text-transform:uppercase}
+button{width:100%;padding:13px;font-size:15px;font-weight:600;border:0;border-radius:9px;
+  background:var(--accent);color:#fff;margin-top:12px}
+button:disabled{opacity:.5}
+button.ghost{background:var(--chip);color:var(--ink);font-weight:500}
+.msg{margin-top:12px;padding:10px 12px;border-radius:9px;font-size:13.5px;display:none}
+.msg.show{display:block}
+.msg.err{background:rgba(192,57,43,.12);color:var(--err)}
+.msg.ok{background:rgba(15,157,88,.12);color:var(--ok)}
+.or{text-align:center;color:var(--muted);font-size:12px;margin:16px 0 4px}
+.help{font-size:12.5px;color:var(--muted);margin-top:10px}
+.hide{display:none}
+code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Audio Caster</h1>
+  <p class="sub">This drives the app on your computer. That computer does the work,
+     so it needs to be awake and on this same wifi.</p>
+
+  <div id="connecting" class="card">
+    <b>Looking for your computer…</b>
+    <p class="help" id="connectingwhere"></p>
+    <button class="ghost" id="forget">Use a different computer</button>
+  </div>
+
+  <div id="setup" class="hide">
+    <div class="card">
+      <label for="link">Paste the pairing link</label>
+      <input id="link" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+             placeholder="http://192.168.1.5:8765/?t=…">
+      <button id="uselink">Connect</button>
+      <p class="help">On the computer: <b>Settings → Let phones on this network control it</b>,
+         then <b>Copy link</b>. This carries the address and the password together.</p>
+    </div>
+
+    <p class="or">or enter them separately</p>
+
+    <div class="card">
+      <label for="host">Computer address</label>
+      <input id="host" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+             placeholder="192.168.1.5:8765">
+      <label for="code" style="margin-top:14px">Pairing code</label>
+      <input id="code" maxlength="8" autocapitalize="characters" autocorrect="off"
+             autocomplete="one-time-code" placeholder="ABCD2345">
+      <button id="usecode">Pair</button>
+      <p class="help">Press <b>Show a pairing code</b> in the computer's settings. It lasts
+         three minutes.</p>
+    </div>
+  </div>
+
+  <div class="msg" id="msg"></div>
+</div>
+<script src="host.js"></script>
+<script src="shell.js"></script>
+</body>
+</html>

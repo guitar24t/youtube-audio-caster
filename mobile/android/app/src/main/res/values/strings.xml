@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Audio Caster</string>
+    <string name="title_activity_main">Audio Caster</string>
+    <string name="package_name">com.guitar24t.youtubeaudiocaster</string>
+    <string name="custom_url_scheme">com.guitar24t.youtubeaudiocaster</string>
+</resources>

@@ -101,6 +101,9 @@ label.sm{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6
 .pairurl{display:block;margin-top:6px;padding:6px 8px;background:var(--chip);border-radius:6px;
   font-size:11.5px;word-break:break-all;user-select:all}
 .pairbtns{display:flex;gap:6px;margin-top:6px}
+.paircode{display:block;margin-top:6px;padding:8px;background:var(--chip);border-radius:6px;
+  font-size:20px;letter-spacing:3px;text-align:center;user-select:all;
+  font-variant-numeric:tabular-nums}
 .aud{font-size:11px;background:var(--chip);border-radius:5px;padding:1px 6px;color:var(--muted)}
 #plitems{margin-top:12px;max-height:340px;overflow-y:auto;border-radius:9px}
 #plitems:empty{display:none}
@@ -241,6 +244,13 @@ button.mini.done{background:var(--ok)}
           <button class="ghost mini" id="setpaircopy">Copy link</button>
           <button class="ghost mini" id="setpairnew" title="Invalidate the old link">New link</button>
         </span>
+        <span class="meta" style="margin-top:10px;display:block">
+          In the phone app, enter this code instead. It lasts three minutes.
+        </span>
+        <code class="paircode" id="setpaircode">—</code>
+        <span class="pairbtns">
+          <button class="ghost mini" id="setpaircodebtn">Show a pairing code</button>
+        </span>
       </span>
     </div>
     <div id="setmsg"></div>
@@ -343,9 +353,37 @@ button.mini.done{background:var(--ok)}
 const $=id=>document.getElementById(id);
 let YT_PLAYER=null, YT_READY=false, CUR_VID=null, SYNCING=false, PENDING_VID=null;
 
+/* On this computer there is no token and none is needed - the server knows the
+   difference between itself and the wifi. A phone gets one from the pairing
+   link, keeps it, and strips it out of the address bar so it is not sitting in
+   history or in a screenshot of the url. */
+let PAIR_TOKEN=null;
+/* Empty on the desktop, where the page is served BY the server it talks to.
+   The phone app bundles this same page and points it at the computer it paired
+   with, so every request needs the host in front of it. One place, because
+   api() and clog() are the only two things here that touch the network. */
+let API_BASE='';
+try{
+  PAIR_TOKEN=localStorage.getItem('casterToken')||null;
+  API_BASE=(localStorage.getItem('casterHost')||'').replace(/\/+$/,'');
+}catch(e){}
+(function(){
+  try{
+    const u=new URL(location.href), t=u.searchParams.get('t');
+    if(!t) return;
+    PAIR_TOKEN=t;
+    try{ localStorage.setItem('casterToken',t); }catch(e){}
+    u.searchParams.delete('t');
+    history.replaceState(null,'',u.pathname+(u.search||'')+(u.hash||''));
+  }catch(e){}
+})();
+
 /* send diagnostics to the server log so problems are visible without a debugger */
-function clog(msg, level){ try{ fetch('/api/clientlog',{method:'POST',
-  headers:{'Content-Type':'application/json'},body:JSON.stringify({msg, level})}); }catch(e){} }
+function clog(msg, level){ try{
+  fetch(API_BASE+'/api/clientlog',{method:'POST',
+    headers:{'Content-Type':'application/json',
+             ...(PAIR_TOKEN?{'X-Caster-Token':PAIR_TOKEN}:{})},
+    body:JSON.stringify({msg, level})}); }catch(e){} }
 
 /* Both of these, not just the first. A rejected promise and an uncaught throw
    look identical to someone watching the app misbehave, but only throws were
@@ -441,27 +479,10 @@ function mountVideo(vid){
   }catch(e){ clog('mount threw: '+e.message); CUR_VID=null; }
 }
 
-/* On this computer there is no token and none is needed - the server knows the
-   difference between itself and the wifi. A phone gets one from the pairing
-   link, keeps it, and strips it out of the address bar so it is not sitting in
-   history or in a screenshot of the url. */
-let PAIR_TOKEN=null;
-try{ PAIR_TOKEN=localStorage.getItem('casterToken')||null; }catch(e){}
-(function(){
-  try{
-    const u=new URL(location.href), t=u.searchParams.get('t');
-    if(!t) return;
-    PAIR_TOKEN=t;
-    try{ localStorage.setItem('casterToken',t); }catch(e){}
-    u.searchParams.delete('t');
-    history.replaceState(null,'',u.pathname+(u.search||'')+(u.hash||''));
-  }catch(e){}
-})();
-
 async function api(p,o){
   const opts={...(o||{})};
   if(PAIR_TOKEN) opts.headers={...(opts.headers||{}),'X-Caster-Token':PAIR_TOKEN};
-  const r=await fetch(p,opts);let j={};try{j=await r.json()}catch(e){}
+  const r=await fetch(API_BASE+p,opts);let j={};try{j=await r.json()}catch(e){}
   if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j;}
 
 /* Remembered so the note under the picker can be redrawn on selection without
@@ -848,9 +869,25 @@ function renderSettings(s){
     : '—');
   $('setpaircopy').disabled=!link;
   $('setpairnew').disabled=!link;
+  $('setpaircodebtn').disabled=!net.enabled;
   PAIR_LINK=link;
+  paintPairCode(net.claim||null);
 }
-let PAIR_LINK=null;
+let PAIR_LINK=null, PAIR_CODE_TIMER=null;
+
+/* The code is only interesting while it is alive, and a stale one on screen is
+   how somebody ends up typing an expired code three times. */
+function paintPairCode(claim){
+  clearInterval(PAIR_CODE_TIMER); PAIR_CODE_TIMER=null;
+  if(!claim||!claim.code){ $('setpaircode').textContent='—'; return; }
+  const tick=()=>{
+    const left=Math.round((claim.expires_at-Date.now())/1000);
+    if(left<=0){ $('setpaircode').textContent='—';
+      clearInterval(PAIR_CODE_TIMER); PAIR_CODE_TIMER=null; return; }
+    $('setpaircode').textContent=`${claim.code}   ${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`;
+  };
+  tick(); PAIR_CODE_TIMER=setInterval(tick,1000);
+}
 
 async function loadSettings(){
   try{
@@ -878,6 +915,13 @@ $('setpaircopy').onclick=async()=>{
   try{ await navigator.clipboard.writeText(PAIR_LINK); setmsg('pairing link copied','ok');
     setTimeout(()=>setmsg(''),2000); }
   catch(e){ setmsg('could not copy: '+e.message,'err'); }
+};
+$('setpaircodebtn').onclick=async()=>{
+  setmsg('');
+  try{ const c=await api('/api/pair/start',{method:'POST'});
+    paintPairCode(c);
+    setmsg('enter this code in the phone app','ok'); setTimeout(()=>setmsg(''),4000);
+  }catch(e){ setmsg(e.message,'err'); }
 };
 $('setpairnew').onclick=async()=>{
   setmsg('');

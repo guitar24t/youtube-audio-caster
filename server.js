@@ -1085,11 +1085,49 @@ app.use(express.json());
 
    Registered before the routes rather than sprinkled through them, so a route
    added later is covered by having been added, not by somebody remembering. */
+/* The phone app bundles the same page this server serves and calls the api
+   from its own origin, so the browser needs to be told those replies may be
+   read. Only these three - a webview's origin is fixed by the platform, so
+   there is nothing to widen this to. It is not a security boundary either way:
+   the pairing token is what decides who gets an answer, and CORS only decides
+   whether a browser hands that answer to script.
+
+   Capacitor serves the app from capacitor://localhost on iOS and from
+   http(s)://localhost on Android, per capacitor.config.json in mobile/. */
+const APP_ORIGINS = new Set(['capacitor://localhost', 'http://localhost', 'https://localhost']);
+
+app.use('/api', (req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && APP_ORIGINS.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, X-Caster-Token');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.set('Access-Control-Max-Age', '600');
+  }
+  /* Answered before the token gate on purpose: a preflight never carries the
+     custom header it is asking permission for, so gating it would 401 every
+     request the app ever made. It reveals nothing - the reply is the same for
+     a paired app and an unpaired one. */
+  if (req.method === 'OPTIONS') return res.sendStatus(origin && APP_ORIGINS.has(origin) ? 204 : 403);
+  next();
+});
+
 const fromLoopback = req => PAIR.isLoopback(req.socket.remoteAddress);
 const suppliedToken = req =>
   req.get('x-caster-token') || (req.query && req.query.t) || '';
 
 app.use('/api', (req, res, next) => {
+  /* The one route that cannot require a token, because it is how a device gets
+     one. It is not unprotected: the code it wants only exists while somebody is
+     looking at the pairing screen on this computer, it lasts three minutes, and
+     ten wrong guesses close it. */
+  if (req.path === '/pair/claim') {
+    if (!fromLoopback(req) && !SET.load().allow_network_access) {
+      return res.status(403).json({ error: 'this app is not accepting connections from the network' });
+    }
+    return next();
+  }
   const loopback = fromLoopback(req);
   const verdict = PAIR.decide({
     loopback,
@@ -1351,9 +1389,34 @@ app.get('/api/settings', (req, res) => res.json(settingsPayload(fromLoopback(req
 /* Rotating invalidates every phone that was paired, which is the point: it is
    the button you press after showing the code to a room. Loopback only - a
    paired phone must not be able to lock out the others. */
+/* Opening the window is something only this computer may do - it is the screen
+   showing the code. */
+app.post('/api/pair/start', (req, res) => {
+  if (!fromLoopback(req)) return res.status(403).json({ error: 'pair codes are managed from the app window' });
+  if (!SET.load().allow_network_access) {
+    return res.status(409).json({ error: 'turn on network access first' });
+  }
+  res.json(PAIR.openClaim());
+});
+
+app.post('/api/pair/stop', (req, res) => {
+  if (!fromLoopback(req)) return res.status(403).json({ error: 'pair codes are managed from the app window' });
+  PAIR.closeClaim();
+  res.json({ ok: true });
+});
+
+/* The trade: a short code for the real token. Deliberately says nothing about
+   why a code failed. */
+app.post('/api/pair/claim', (req, res) => {
+  const token = PAIR.redeem((req.body || {}).code);
+  if (!token) return res.status(401).json({ error: 'that code is not valid' });
+  res.json({ token, name: 'YouTube Audio Caster' });
+});
+
 app.post('/api/pair/rotate', (req, res) => {
   if (!fromLoopback(req)) return res.status(403).json({ error: 'pair codes are managed from the app window' });
   PAIR.rotate();
+  PAIR.closeClaim();      // an open code would otherwise still buy the dead token
   res.json(networkStatus(true));
 });
 
@@ -1655,6 +1718,7 @@ function networkStatus(includeToken = false) {
   if (includeToken && enabled) {
     out.token = PAIR.token();
     out.pair_url = out.url ? `${out.url}?t=${out.token}` : null;
+    out.claim = PAIR.claimState();
   }
   return out;
 }

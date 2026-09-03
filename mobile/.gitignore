@@ -1,0 +1,12 @@
+node_modules/
+# Copied in from ../renderer at build time. One source of truth lives there;
+# a checked-in copy here would be a second one to forget to update.
+www/app/
+# Build output, not sources.
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+ios/App/build/
+ios/App/Pods/
+ios/App/App/public/

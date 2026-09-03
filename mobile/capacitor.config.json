@@ -1,0 +1,12 @@
+{
+  "appId": "com.guitar24t.youtubeaudiocaster",
+  "appName": "Audio Caster",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http",
+    "iosScheme": "capacitor"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
