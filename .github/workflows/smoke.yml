@@ -6,23 +6,25 @@ name: Smoke test
 on:
   push:
     branches: ['**']
-  # Without this a pull request gets no checks at all, which reads as "failing"
-  # rather than "never ran" - there is no green tick to be missing, so nobody
-  # can tell a broken branch from an unchecked one.
+  # Checks attach to a COMMIT, so a branch pushed here already shows its results
+  # on any pull request opened from it. What has no results is a pull request
+  # from a FORK: those commits never existed in this repository, so nothing ever
+  # ran against them and the pull request shows no checks at all - which reads
+  # worse than a failure, because there is no missing green tick to notice.
   pull_request:
     branches: ['**']
   workflow_dispatch:
 
-# A branch that is pushed and then opened as a pull request would otherwise run
-# this twice over the same code. Keyed on the commit rather than the ref, so the
-# push run and the pull_request run for one commit collapse into a single run
-# instead of paying for two Windows and two macOS runners.
-concurrency:
-  group: smoke-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: true
-
 jobs:
   smoke:
+    # Only fork pull requests, because a same-repo one was already covered by
+    # the push that created the branch. Running both would either double the
+    # bill or - with a concurrency group - leave a CANCELLED run behind, which
+    # looks like a failure in the Actions tab and is what this whole change set
+    # out to stop.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name != github.repository
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
