@@ -14,13 +14,17 @@ const fs = require('fs');
 const path = require('path');
 const { canvas, glyph, roundedRect, png } = require('../../scripts/make-icon.js');
 
+const ACCENT = [47, 109, 246];
+
 function appIcon(size) {
   const c = canvas(size, size);
-  /* Same construction as the desktop icon: the blue rounded square with the
-     speaker over it, scaled by proportion so it stays crisp. */
-  roundedRect(c, size, Math.round(size * 0.22), [47, 109, 246, 255]);
+  /* Full bleed, and deliberately NOT the desktop's rounded square: iOS applies
+     its own mask, so rounding it here would show the system's corners cutting
+     into ours. It also has to be opaque - actool rejects an app icon with an
+     alpha channel, and says only "Distill failed for unknown reasons". */
+  roundedRect(c, size, 0, [...ACCENT, 255]);
   glyph(c, size, [255, 255, 255, 255], 0.3);
-  return png(c);
+  return png(c, { alpha: false, over: ACCENT });
 }
 
 /* iOS asset catalogues take a single 1024 image now; the older per-device sizes

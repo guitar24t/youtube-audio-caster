@@ -55,11 +55,25 @@ function crc32(buf) {
   for (const b of buf) c = TBL[(c ^ b) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
-function png(c) {
-  const raw = Buffer.alloc((c.W * 4 + 1) * c.H);
+/* alpha:false writes colour type 2 instead of 6. iOS app icons must be fully
+   opaque - actool rejects a transparent one with "Distill failed for unknown
+   reasons", which names neither the file nor the reason. Anything still
+   transparent at that point is composited onto `over`, since dropping the
+   channel would otherwise turn it black. */
+function png(c, { alpha = true, over = [255, 255, 255] } = {}) {
+  const stride = alpha ? 4 : 3;
+  const raw = Buffer.alloc((c.W * stride + 1) * c.H);
   for (let y = 0; y < c.H; y++) {
-    raw[y * (c.W * 4 + 1)] = 0;
-    c.px.copy(raw, y * (c.W * 4 + 1) + 1, y * c.W * 4, (y + 1) * c.W * 4);
+    const row = y * (c.W * stride + 1);
+    raw[row] = 0;
+    if (alpha) {
+      c.px.copy(raw, row + 1, y * c.W * 4, (y + 1) * c.W * 4);
+      continue;
+    }
+    for (let x = 0; x < c.W; x++) {
+      const i = (y * c.W + x) * 4, o = row + 1 + x * 3, a = c.px[i + 3] / 255;
+      for (let k = 0; k < 3; k++) raw[o + k] = Math.round(c.px[i + k] * a + over[k] * (1 - a));
+    }
   }
   const chunk = (type, data) => {
     const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
@@ -69,7 +83,7 @@ function png(c) {
   };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(c.W, 0); ihdr.writeUInt32BE(c.H, 4);
-  ihdr[8] = 8; ihdr[9] = 6;
+  ihdr[8] = 8; ihdr[9] = alpha ? 6 : 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
