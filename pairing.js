@@ -99,4 +99,68 @@ function decide({ loopback, networkEnabled, tokenValid }) {
   return { allow: true };
 }
 
-module.exports = { TOKEN_BYTES, init, file, token, rotate, matches, mint, isLoopback, decide };
+/* ---------- claiming, for a device that cannot be handed a link ----------
+
+   A phone app has no address bar to paste 64 hex characters into, so it trades
+   a short code for the real token instead. The code is what makes this safe
+   rather than the transport:
+
+     - it only exists while someone is looking at the pairing screen
+     - it dies after THREE MINUTES, or the first successful claim, or ten wrong
+       guesses, whichever comes first
+     - the alphabet has no O/0/I/1, because a code that is read aloud across a
+       room and mistyped costs an attempt
+
+   32 characters, 8 long, is 2^40 possibilities against ten guesses in three
+   minutes. The attempt limit is doing the work here, not the entropy. */
+const CLAIM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CLAIM_LENGTH = 8;
+const CLAIM_TTL_MS = 3 * 60 * 1000;
+const CLAIM_MAX_ATTEMPTS = 10;
+
+let claim = null;
+
+function makeCode() {
+  const bytes = crypto.randomBytes(CLAIM_LENGTH);
+  let out = '';
+  /* rejection-free because the alphabet is exactly 32 long, so five bits map
+     onto it with no modulo bias */
+  for (const byte of bytes) out += CLAIM_ALPHABET[byte & 31];
+  return out;
+}
+
+function openClaim(now = Date.now()) {
+  claim = { code: makeCode(), expiresAt: now + CLAIM_TTL_MS, attempts: 0 };
+  return { code: claim.code, expires_at: claim.expiresAt };
+}
+
+function closeClaim() { claim = null; }
+
+function claimState(now = Date.now()) {
+  if (!claim) return null;
+  if (now >= claim.expiresAt) { claim = null; return null; }
+  return { code: claim.code, expires_at: claim.expiresAt,
+    attempts_left: CLAIM_MAX_ATTEMPTS - claim.attempts };
+}
+
+/* Returns the token on success and null on every kind of failure, without
+   saying which kind - "wrong code", "expired" and "no code open" are the same
+   answer to anyone guessing. */
+function redeem(supplied, now = Date.now()) {
+  if (!claim || now >= claim.expiresAt) { claim = null; return null; }
+  claim.attempts += 1;
+  if (claim.attempts > CLAIM_MAX_ATTEMPTS) { claim = null; return null; }
+  const given = Buffer.alloc(CLAIM_LENGTH);
+  const want = Buffer.alloc(CLAIM_LENGTH);
+  given.write(String(supplied == null ? '' : supplied).trim().toUpperCase().slice(0, CLAIM_LENGTH));
+  want.write(claim.code);
+  if (!crypto.timingSafeEqual(given, want)) return null;
+  claim = null;                       // one use only
+  return token();
+}
+
+module.exports = {
+  TOKEN_BYTES, init, file, token, rotate, matches, mint, isLoopback, decide,
+  CLAIM_ALPHABET, CLAIM_LENGTH, CLAIM_TTL_MS, CLAIM_MAX_ATTEMPTS,
+  openClaim, closeClaim, claimState, redeem,
+};

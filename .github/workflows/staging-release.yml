@@ -107,9 +107,64 @@ jobs:
           retention-days: 14
           overwrite: true
 
+  # The phone app, on the branch where it actually gets tried out. Same debug
+  # signing as the release pipeline: it sideloads, and it needs no secrets, so
+  # this leg cannot be the reason a staging build stops publishing.
+  android:
+    name: Android staging installer
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: false
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set staging version
+        run: npm version --no-git-tag-version "${{ needs.prepare.outputs.version }}"
+
+      - name: Install
+        working-directory: mobile
+        run: npm ci
+
+      # Copies the desktop page in, draws the icons, and runs cap sync -
+      # which regenerates capacitor-cordova-android-plugins, gitignored by
+      # Capacitor's template and required by gradle at configure time.
+      - name: Prepare
+        working-directory: mobile
+        run: npm run prepare:android
+
+      - name: Build the apk
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+             "dist/YouTube.Audio.Caster-${{ needs.prepare.outputs.version }}-Android.apk"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-Android-${{ needs.prepare.outputs.version }}
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
   publish:
     name: Publish staging prerelease
-    needs: [prepare, build]
+    needs: [prepare, build, android]
     if: >-
       github.event.repository.fork == true &&
       github.repository == 'guitar24t/youtube-audio-caster' &&
@@ -145,6 +200,7 @@ jobs:
               *-macOS-x64.dmg) NAME=YouTube.Audio.Caster-Staging-macOS-x64.dmg ;;
               *-arm64-mac.zip) NAME=YouTube.Audio.Caster-Staging-arm64-mac.zip ;;
               *-mac.zip) NAME=YouTube.Audio.Caster-Staging-x64-mac.zip ;;
+              *-Android.apk) NAME=YouTube.Audio.Caster-Staging-Android.apk ;;
               # Anything not named here is skipped rather than fatal. This ran
               # AFTER both builds succeeded, so exiting threw away good
               # installers over a file the renamer had simply never been taught
@@ -181,6 +237,7 @@ jobs:
             echo '### Downloads'
             echo '- **macOS** — `.dmg` or `.zip` for Apple Silicon and Intel'
             echo '- **Windows** — installer or portable `.exe`'
+            echo '- **Android** — `.apk`, sideloaded; needs the desktop app awake on the same wifi'
             echo
             echo 'These builds are unsigned and may trigger operating-system warnings.'
             echo 'The auto-generated source archives below belong to the permanent release marker; use the commit link above for the source used by these installers.'

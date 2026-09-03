@@ -1065,6 +1065,60 @@ test('a corrupt or truncated pairing file mints a new token instead of failing o
   }
 });
 
+test('a pair code is short, unambiguous, and buys the token exactly once', () => {
+  const dir = tmp();
+  PAIR.init(dir);
+  const opened = PAIR.openClaim();
+  assert.strictEqual(opened.code.length, PAIR.CLAIM_LENGTH);
+  /* read aloud across a room: nothing that can be heard or seen as something
+     else */
+  assert.ok(!/[O0I1]/.test(opened.code), `ambiguous character in ${opened.code}`);
+  for (const ch of opened.code) assert.ok(PAIR.CLAIM_ALPHABET.includes(ch));
+
+  assert.strictEqual(PAIR.redeem('WRONGONE'), null);
+  assert.strictEqual(PAIR.redeem(opened.code), PAIR.token(), 'the right code did not buy the token');
+  assert.strictEqual(PAIR.redeem(opened.code), null, 'a code was spent twice');
+});
+
+test('a pair code is accepted however it was typed, and only while it is open', () => {
+  const dir = tmp();
+  PAIR.init(dir);
+  const { code } = PAIR.openClaim();
+  assert.strictEqual(PAIR.redeem(`  ${code.toLowerCase()}  `), PAIR.token(),
+    'case and stray spaces should not cost someone their code');
+
+  // expiry
+  const opened = PAIR.openClaim(1000);
+  assert.ok(PAIR.claimState(1000), 'the window should be open');
+  assert.strictEqual(PAIR.redeem(opened.code, 1000 + PAIR.CLAIM_TTL_MS), null, 'an expired code worked');
+  assert.strictEqual(PAIR.claimState(1000 + PAIR.CLAIM_TTL_MS), null);
+
+  // closing it by hand
+  const third = PAIR.openClaim();
+  PAIR.closeClaim();
+  assert.strictEqual(PAIR.redeem(third.code), null, 'a closed code still worked');
+});
+
+test('REGRESSION: guessing a pair code closes the window rather than continuing', () => {
+  const dir = tmp();
+  PAIR.init(dir);
+  const { code } = PAIR.openClaim();
+  for (let i = 0; i < PAIR.CLAIM_MAX_ATTEMPTS; i++) {
+    assert.strictEqual(PAIR.redeem('ZZZZZZZZ'), null);
+  }
+  assert.strictEqual(PAIR.redeem(code), null,
+    'the correct code still worked after the attempt limit was spent');
+  assert.strictEqual(PAIR.claimState(), null, 'the window stayed open after being exhausted');
+});
+
+test('no pair code exists until somebody asks for one', () => {
+  const dir = tmp();
+  PAIR.init(dir);
+  PAIR.closeClaim();
+  assert.strictEqual(PAIR.claimState(), null);
+  assert.strictEqual(PAIR.redeem('ANYTHING'), null, 'a claim succeeded with no window open');
+});
+
 test('settings fall back to defaults for a missing, corrupt or hand-broken file', () => {
   const dir = tmp();
   SET.init(dir);

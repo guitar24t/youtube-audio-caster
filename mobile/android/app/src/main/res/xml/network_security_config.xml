@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  This app talks to one thing: a copy of YouTube Audio Caster running on a
+  computer on the same wifi, over plain HTTP on a private address the user
+  typed in themselves. Android blocks cleartext by default from API 28 up, so
+  without this the app cannot reach the only server it exists to reach.
+
+  It would be better to permit cleartext ONLY for private ranges, and that is
+  what the intent is - but network security config matches domains and literal
+  hosts, not CIDR blocks, and the address is not known until the user enters
+  it, so there is nothing to enumerate here. The narrowing that is actually
+  available is in the app: it never contacts a host it was not given, and the
+  pairing token means a wrong host cannot do anything with the connection.
+
+  Nothing here is sent in the clear that is worth intercepting except the
+  pairing token, and anyone positioned to read it on your own wifi could reach
+  the computer directly anyway.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -58,11 +58,161 @@ jobs:
             dist/*.exe
           if-no-files-found: error
 
+  # The phone app is the same page as the desktop, wrapped. It builds from
+  # mobile/, which has its own package.json so nothing here can disturb the
+  # electron build.
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Capacitor 8 compiles at source release 21, which a JDK 17 cannot target;
+      # 25 is newer than Gradle 8.14 understands. 21 is the one that works.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install
+        working-directory: mobile
+        run: npm ci
+
+      # One script, used here and by hand, so CI and a laptop cannot drift.
+      # It copies the desktop page in (not committed - renderer/ is the source),
+      # draws the icons, and runs cap sync, which regenerates
+      # capacitor-cordova-android-plugins. That directory is gitignored by
+      # Capacitor's own template, and gradle fails at CONFIGURE time without it,
+      # pointing at a file rather than saying a sync is missing.
+      - name: Prepare
+        working-directory: mobile
+        run: npm run prepare:android
+
+      - name: Build the apk
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      # Debug-signed, like the desktop installers are unsigned: it sideloads on
+      # any phone with "install unknown apps" allowed, and needs no secrets, so
+      # a fork or a pull request builds it exactly the same way.
+      - name: Name it after the release
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p out
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+             "out/YouTube.Audio.Caster-$VERSION-Android.apk"
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Android
+          path: out/*.apk
+          if-no-files-found: error
+
+  # Two halves. The compile always runs and proves the project still builds -
+  # that needs no account and no secrets, so it works in a fork. The archive and
+  # the TestFlight upload only happen where the Apple credentials exist, because
+  # an unsigned ipa cannot be installed by anyone and is not worth producing.
+  ios:
+    name: iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        working-directory: mobile
+        run: npm ci
+
+      # Also draws AppIcon at 1024. Xcode refuses to build against an empty
+      # icon set, and the error it gives - "did not have any applicable
+      # content" - does not mention icons being absent.
+      - name: Prepare
+        working-directory: mobile
+        run: npm run prepare:ios
+
+      - name: It still compiles
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild -scheme App -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Are there credentials to sign with?
+        id: signing
+        shell: bash
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          if [ -n "$ASC_KEY_ID" ]; then echo "have=yes" >> "$GITHUB_OUTPUT"
+          else echo "have=no" >> "$GITHUB_OUTPUT"
+               echo "No Apple credentials in this repository - compiled only."
+               echo "Set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 to build for TestFlight."
+          fi
+
+      # The App Store Connect API key path, rather than a base64'd p12 and
+      # mobileprovision: those expire on a calendar and redden a future tag
+      # build for reasons that have nothing to do with the commit being tagged.
+      - name: Archive and upload to TestFlight
+        if: steps.signing.outputs.have == 'yes' && startsWith(github.ref, 'refs/tags/v')
+        working-directory: mobile/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          KEYDIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEYDIR"
+          printf '%s' "$ASC_KEY_P8" > "$KEYDIR/AuthKey_$ASC_KEY_ID.p8"
+
+          VERSION=$(node -p "require('../../../package.json').version")
+          xcodebuild -scheme App -configuration Release -archivePath build/App.xcarchive \
+            -destination 'generic/platform=iOS' \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEYDIR/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            MARKETING_VERSION="$VERSION" \
+            archive
+
+          cat > ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+          </dict></plist>
+          PLIST
+
+          xcodebuild -exportArchive -archivePath build/App.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEYDIR/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Forget the key
+        if: always()
+        run: rm -rf "$HOME/.appstoreconnect/private_keys"
+
   # One job publishes, after both builds are done. Having each build job attach
   # its own files races two writers against the same release.
   release:
     name: Publish release
-    needs: [build]
+    needs: [build, android, ios]
     # always() is what lets an OPTIONAL job be added to `needs` later without its
     # absence suppressing this one. Anything genuinely required must be named in
     # the condition, as `build` is here; anything optional is deliberately left
@@ -72,6 +222,7 @@ jobs:
       always()
       && startsWith(github.ref, 'refs/tags/v')
       && needs.build.result == 'success'
+      && needs.android.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

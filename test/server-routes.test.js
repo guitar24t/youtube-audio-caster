@@ -151,6 +151,37 @@ test('a device on the network needs the pairing token, and is told nothing befor
     // rotating is not something a paired phone may do
     assert.equal((await fetch(viaLan('/api/pair/rotate'),
       { method: 'POST', headers: { 'X-Caster-Token': token } })).status, 403);
+
+    /* The phone app calls from its own origin, so the browser preflights. A
+       preflight cannot carry the token it is asking permission for, so it has
+       to be answered before the gate - and that is only safe because the reply
+       is identical whether or not the caller is paired. */
+    const preflight = await fetch(viaLan('/api/control'), {
+      method: 'OPTIONS',
+      headers: { Origin: 'capacitor://localhost',
+                 'Access-Control-Request-Method': 'POST',
+                 'Access-Control-Request-Headers': 'x-caster-token' },
+    });
+    assert.equal(preflight.status, 204, 'the app origin was not allowed to preflight');
+    assert.equal(preflight.headers.get('access-control-allow-origin'), 'capacitor://localhost');
+    assert.match(preflight.headers.get('access-control-allow-headers'), /X-Caster-Token/i);
+
+    // a site that is not the app gets nothing to work with
+    const stranger = await fetch(viaLan('/api/control'), {
+      method: 'OPTIONS', headers: { Origin: 'https://evil.example',
+                                    'Access-Control-Request-Method': 'POST' },
+    });
+    assert.equal(stranger.status, 403);
+    assert.equal(stranger.headers.get('access-control-allow-origin'), null);
+
+    // and the real request still needs the token, origin or no origin
+    assert.equal((await fetch(viaLan('/api/status'),
+      { headers: { Origin: 'capacitor://localhost' } })).status, 401,
+    'the app origin was let in without pairing');
+    const allowed = await fetch(viaLan('/api/status'),
+      { headers: { Origin: 'capacitor://localhost', 'X-Caster-Token': token } });
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.headers.get('access-control-allow-origin'), 'capacitor://localhost');
   } finally {
     SET.patch({ allow_network_access: false });
   }

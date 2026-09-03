@@ -1,0 +1,28 @@
+node_modules/
+# Copied in from ../renderer at build time. One source of truth lives there;
+# a checked-in copy here would be a second one to forget to update.
+www/app/
+# Build output, not sources.
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+ios/App/build/
+ios/App/Pods/
+ios/App/App/public/
+
+# All of the app's artwork is drawn at build time by scripts/make-icons.js from
+# the same glyph the desktop uses. Committing it would be a second copy to keep
+# in step - and worse, this repo tracks *.png in LFS while CI checks out with
+# lfs:false, so committed art reaches the runner as text pointers: iOS fails
+# with "Distill failed for unknown reasons" and Android silently ships an app
+# with no icon.
+# The xml beside these (adaptive icon definitions) is hand-owned and stays.
+android/app/src/main/res/mipmap-*/ic_launcher.png
+android/app/src/main/res/mipmap-*/ic_launcher_round.png
+android/app/src/main/res/mipmap-*/ic_launcher_foreground.png
+android/app/src/main/res/drawable/splash.png
+android/app/src/main/res/drawable-land-*/splash.png
+android/app/src/main/res/drawable-port-*/splash.png
+ios/App/App/Assets.xcassets/AppIcon.appiconset/
+ios/App/App/Assets.xcassets/Splash.imageset/*.png

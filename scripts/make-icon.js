@@ -55,11 +55,25 @@ function crc32(buf) {
   for (const b of buf) c = TBL[(c ^ b) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
-function png(c) {
-  const raw = Buffer.alloc((c.W * 4 + 1) * c.H);
+/* alpha:false writes colour type 2 instead of 6. iOS app icons must be fully
+   opaque - actool rejects a transparent one with "Distill failed for unknown
+   reasons", which names neither the file nor the reason. Anything still
+   transparent at that point is composited onto `over`, since dropping the
+   channel would otherwise turn it black. */
+function png(c, { alpha = true, over = [255, 255, 255] } = {}) {
+  const stride = alpha ? 4 : 3;
+  const raw = Buffer.alloc((c.W * stride + 1) * c.H);
   for (let y = 0; y < c.H; y++) {
-    raw[y * (c.W * 4 + 1)] = 0;
-    c.px.copy(raw, y * (c.W * 4 + 1) + 1, y * c.W * 4, (y + 1) * c.W * 4);
+    const row = y * (c.W * stride + 1);
+    raw[row] = 0;
+    if (alpha) {
+      c.px.copy(raw, row + 1, y * c.W * 4, (y + 1) * c.W * 4);
+      continue;
+    }
+    for (let x = 0; x < c.W; x++) {
+      const i = (y * c.W + x) * 4, o = row + 1 + x * 3, a = c.px[i + 3] / 255;
+      for (let k = 0; k < 3; k++) raw[o + k] = Math.round(c.px[i + k] * a + over[k] * (1 - a));
+    }
   }
   const chunk = (type, data) => {
     const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
@@ -69,43 +83,53 @@ function png(c) {
   };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(c.W, 0); ihdr.writeUInt32BE(c.H, 4);
-  ihdr[8] = 8; ihdr[9] = 6;
+  ihdr[8] = 8; ihdr[9] = alpha ? 6 : 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-const OUT = path.join(__dirname, '..', 'assets');
-fs.mkdirSync(OUT, { recursive: true });
-const write = (name, c) => { fs.writeFileSync(path.join(OUT, name), png(c)); console.log('  ' + name); };
+/* The glyph and the PNG encoder are useful to anything that needs this app's
+   icon at a size nobody thought of yet - the phone app needs 1024, which is not
+   a size the desktop ever asks for. Exported rather than copied, so there is one
+   drawing of the speaker in this repository and not two that drift. */
+module.exports = { canvas, glyph, roundedRect, png };
 
-// macOS template: supplied black + alpha artwork, automatically recolored by macOS.
-// Keeping it out of the generator prevents npm install from replacing the source
-// design with the older hand-drawn glyph.
-for (const name of ['trayTemplate.png', 'trayTemplate@2x.png']) {
-  const file = path.join(OUT, name);
-  if (!fs.existsSync(file))
-    throw new Error(`missing supplied macOS menu-bar icon: assets/${name}`);
-  /* Existing is not enough: a checkout without git-lfs leaves a text pointer
-     here, which packages happily and shows up as a blank menu bar icon in the
-     built app. Check the magic bytes so that fails at install instead. */
-  const head = fs.readFileSync(file).subarray(0, 8);
-  if (!head.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
-    throw new Error(`assets/${name} is not a PNG - if it starts with `
-      + `"version https://git-lfs..." this checkout needs: git lfs pull`);
-  console.log('  ' + name + ' (supplied)');
+/* Writing the desktop's icons is what happens when this is RUN. Requiring it
+   draws nothing. */
+if (require.main === module) {
+  const OUT = path.join(__dirname, '..', 'assets');
+  fs.mkdirSync(OUT, { recursive: true });
+  const write = (name, c) => { fs.writeFileSync(path.join(OUT, name), png(c)); console.log('  ' + name); };
+
+  // macOS template: supplied black + alpha artwork, automatically recolored by macOS.
+  // Keeping it out of the generator prevents npm install from replacing the source
+  // design with the older hand-drawn glyph.
+  for (const name of ['trayTemplate.png', 'trayTemplate@2x.png']) {
+    const file = path.join(OUT, name);
+    if (!fs.existsSync(file))
+      throw new Error(`missing supplied macOS menu-bar icon: assets/${name}`);
+    /* Existing is not enough: a checkout without git-lfs leaves a text pointer
+       here, which packages happily and shows up as a blank menu bar icon in the
+       built app. Check the magic bytes so that fails at install instead. */
+    const head = fs.readFileSync(file).subarray(0, 8);
+    if (!head.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+      throw new Error(`assets/${name} is not a PNG - if it starts with `
+        + `"version https://git-lfs..." this checkout needs: git lfs pull`);
+    console.log('  ' + name + ' (supplied)');
+  }
+  // Windows: white glyph over a soft dark halo so it reads on light AND dark taskbars
+  {
+    const s = 32, c = canvas(s, s);
+    glyph(c, s, [0, 0, 0, 120], 1.1);          // halo first
+    glyph(c, s, [255, 255, 255, 255], 0);      // glyph on top
+    write('tray-win.png', c);
+  }
+  // app icon for the taskbar / window / installer
+  {
+    const s = 512, c = canvas(s, s);
+    roundedRect(c, s, Math.round(s * 0.22), [47, 109, 246, 255]);
+    glyph(c, s, [255, 255, 255, 255], 0.3);
+    write('icon.png', c);
+  }
+  console.log('icons written');
 }
-// Windows: white glyph over a soft dark halo so it reads on light AND dark taskbars
-{
-  const s = 32, c = canvas(s, s);
-  glyph(c, s, [0, 0, 0, 120], 1.1);          // halo first
-  glyph(c, s, [255, 255, 255, 255], 0);      // glyph on top
-  write('tray-win.png', c);
-}
-// app icon for the taskbar / window / installer
-{
-  const s = 512, c = canvas(s, s);
-  roundedRect(c, s, Math.round(s * 0.22), [47, 109, 246, 255]);
-  glyph(c, s, [255, 255, 255, 255], 0.3);
-  write('icon.png', c);
-}
-console.log('icons written');
